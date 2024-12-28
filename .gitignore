@@ -3,6 +3,6 @@ dist/
 __pycache__/
 checkpoints/
 wandb/
-datasets/
+# datasets/
 results/
 timesfm_jax.egg-info/

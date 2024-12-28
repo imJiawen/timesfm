@@ -15,5 +15,5 @@
 #!/bin/bash
 gdown --fuzzy https://drive.google.com/file/d/1alE33S1GmP5wACMXaLu50rDIoVzBM4ik/view?usp=share_link
 unzip all_six_datasets.zip
-mv all_six_datasets/* .
+mv all_six_datasets/* ./datasets
 rm -rf all_six_datasets*
