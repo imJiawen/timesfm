@@ -769,7 +769,9 @@ class PatchedTimeSeriesDecoder(nn.Module):
       current_padding = paddings[:, 0:final_out.shape[1]]
       input_ts = final_out[:, -max_len:]
       input_padding = current_padding[:, -max_len:]
+      
       fprop_outputs = self(input_ts, input_padding, freq)
+      
       if return_forecast_on_context and step_index == 0:
         # For the first decodings step, collect the model forecast on the
         # context except the unavailable first input batch forecast.

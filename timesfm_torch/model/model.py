@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-
+from timesfm_torch.model.utils import *
 class Embedding(nn.Module):
     """A simple embedding layer that performs embedding lookups from ids in PyTorch.
 
@@ -47,53 +47,62 @@ class Embedding(nn.Module):
 
         return embs
 
-class PositionalEmbedding(nn.Module):
-    """Generates position embedding for a given 1-d sequence in PyTorch.
 
-    Attributes:
-        min_timescale: Start of the geometric index. Determines the periodicity of
-          the added signal.
-        max_timescale: End of the geometric index. Determines the frequency of the
-          added signal.
-        embedding_dims: Dimension of the embedding to be generated.
+class PositionalEmbedding(torch.nn.Module):
+  """Generates position embedding for a given 1-d sequence.
+
+  Attributes:
+      min_timescale: Start of the geometric index. Determines the periodicity of
+        the added signal.
+      max_timescale: End of the geometric index. Determines the frequency of the
+        added signal.
+      embedding_dims: Dimension of the embedding to be generated.
+  """
+
+  def __init__(
+      self,
+      embedding_dims: int,
+      min_timescale: int = 1,
+      max_timescale: int = 10_000,
+  ) -> None:
+    super().__init__()
+    self.min_timescale = min_timescale
+    self.max_timescale = max_timescale
+    self.embedding_dims = embedding_dims
+
+  def forward(self, seq_length=None, position=None):
+    """Generates a Tensor of sinusoids with different frequencies.
+
+    Args:
+        seq_length: an optional Python int defining the output sequence length.
+          if the `position` argument is specified.
+        position:   [B, seq_length], optional position for each token in the
+          sequence, only required when the sequence is packed.
+
+    Returns:
+        [B, seqlen, D] if `position` is specified, else [1, seqlen, D]
     """
-    def __init__(self, min_timescale=1, max_timescale=10_000, embedding_dims=0):
-        super(PositionalEmbedding, self).__init__()
-        self.min_timescale = min_timescale
-        self.max_timescale = max_timescale
-        self.embedding_dims = embedding_dims
+    if position is None:
+      assert seq_length is not None
+      # [1, seqlen]
+      position = torch.arange(seq_length, dtype=torch.float32).unsqueeze(0)
+    else:
+      assert position.ndim == 2, position.shape
 
-    def forward(self, seq_length=None, position=None):
-        """Generates a tensor of sinusoids with different frequencies.
+    num_timescales = self.embedding_dims // 2
+    log_timescale_increment = math.log(
+        float(self.max_timescale) / float(self.min_timescale)) / max(
+            num_timescales - 1, 1)
+    inv_timescales = self.min_timescale * torch.exp(
+        torch.arange(num_timescales, dtype=torch.float32) *
+        -log_timescale_increment)
+    scaled_time = position.unsqueeze(2) * inv_timescales.unsqueeze(0).unsqueeze(
+        0)
+    signal = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=2)
+    # Padding to ensure correct embedding dimension
+    signal = F.pad(signal, (0, 0, 0, self.embedding_dims % 2))
+    return signal
 
-        Args:
-          seq_length: an optional integer defining the output sequence length.
-          position: optional tensor for each token in the sequence, shape [B, seq_length].
-
-        Returns:
-          Tensor of shape [B, seq_length, D] if position is specified, else [1, seq_length, D].
-        """
-        if position is None:
-            assert seq_length is not None, "seq_length must be specified if position is not provided"
-            position = torch.arange(seq_length, dtype=torch.float32).unsqueeze(0)
-        else:
-            assert position.dim() == 2, "position should have dimension 2"
-
-        num_timescales = self.embedding_dims // 2
-        log_timescale_increment = math.log(
-            float(self.max_timescale) / float(self.min_timescale)
-        ) / max(num_timescales - 1, 1)
-        inv_timescales = self.min_timescale * torch.exp(
-            torch.arange(num_timescales, dtype=torch.float32) * -log_timescale_increment
-        )
-        scaled_time = position.unsqueeze(2) * inv_timescales.unsqueeze(0).unsqueeze(0)
-        signal = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=2)
-        
-        if self.embedding_dims % 2 == 1:  # Pad if dimensions are odd
-            zero_padding = torch.zeros(signal.shape[0], signal.shape[1], 1, device=signal.device)
-            signal = torch.cat([signal, zero_padding], dim=2)
-
-        return signal
 
 class LayerNorm(nn.Module):
     """Layer normalization in PyTorch.
@@ -242,26 +251,6 @@ class PerDimScale(nn.Module):
         # Element-wise multiplication of inputs and scale
         outputs = inputs * scale
         return outputs
-
-# class FeedForward(nn.Module):
-#     def __init__(self, input_dim, hidden_dim, output_dim, dropout=0.0):
-#         super().__init__()
-#         self.input_dim = input_dim
-#         self.hidden_dim = hidden_dim
-#         self.output_dim = output_dim
-#         self.dropout = dropout
-#         self.layer_norm = LayerNorm(input_dim)
-#         self.linear1 = nn.Linear(input_dim, hidden_dim)
-#         self.linear2 = nn.Linear(hidden_dim, output_dim)
-#         self.dropout1 = nn.Dropout(dropout)
-#         self.dropout2 = nn.Dropout(dropout)
-
-#     def forward(self, inputs):
-#         x = self.layer_norm(inputs)
-#         x = F.relu(self.dropout1(self.linear1(x)))
-#         x = self.dropout2(self.linear2(x))
-#         x = x + inputs
-#         return x
 
 class FeedForward(nn.Module):
   def __init__(self, input_dim, hidden_dim, output_dim, dropout=0.0):
@@ -413,12 +402,12 @@ class TransformerBlock(nn.Module):
         self.layer_norm = RmsNorm(d_model)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, inputs, mask=None):
+    def forward(self, inputs, mask=None, paddings=None):
         x = self.layer_norm(inputs)
         x = self.attention(x, mask)
         x = self.dropout(x)
         x = x + inputs
-        x = self.feed_forward(x)
+        x = self.feed_forward(x,paddings=paddings)
         return x
 
 
@@ -427,7 +416,12 @@ class Transformer(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList([TransformerBlock(d_model, num_heads, hidden_dim, dropout=dropout) for _ in range(num_layers)])
 
-    def forward(self, x, mask=None):
+    def forward(self, x, paddings=None):
+        
+        padding_mask = convert_paddings_to_mask(paddings, x.dtype)
+        atten_mask = causal_mask(x)
+        mask = merge_masks(padding_mask, atten_mask)
+        
         for layer in self.layers:
-            x = layer(x, mask)
+            x = layer(x, mask, paddings=paddings)
         return x

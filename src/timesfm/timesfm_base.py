@@ -268,12 +268,14 @@ class TimesFmBase:
     for i, ts in enumerate(inputs):
       input_len = ts.shape[0]
       padding = np.zeros(shape=(input_len + self.horizon_len,), dtype=float)
+      # input_len less than context len required, padding in front of the seq
       if input_len < self.context_len:
         num_front_pad = self.context_len - input_len
         ts = np.concatenate([np.zeros(shape=(num_front_pad,), dtype=float), ts],
                             axis=0)
         padding = np.concatenate(
             [np.ones(shape=(num_front_pad,), dtype=float), padding], axis=0)
+      # input_len larger than context len, clip to the context len
       elif input_len > self.context_len:
         ts = ts[-self.context_len:]
         padding = padding[-(self.context_len + self.horizon_len):]
